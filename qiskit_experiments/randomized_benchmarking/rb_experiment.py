@@ -103,6 +103,7 @@ class RBExperiment(BaseExperiment):
         metadata = {
             "experiment_type": self._type,
             "xdata": length,
+            "ylabel": self.num_qubits * "0",
             "group": "Clifford",
             "qubits": self.physical_qubits,
         }

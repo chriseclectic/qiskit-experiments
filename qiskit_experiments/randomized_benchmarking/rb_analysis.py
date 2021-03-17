@@ -53,7 +53,6 @@ class RBAnalysis(CurveFitAnalysis):
         """
         # TODO: Get from experiment level metadata
         num_qubits = len(experiment_data.data[0]["metadata"]["qubits"])
-        outcome = num_qubits * "0"
 
         # Fit function
         def fit_fun(x, a, alpha, b):
@@ -75,18 +74,13 @@ class RBAnalysis(CurveFitAnalysis):
             )
             return [a_guess, alpha_guess, b_guess]
 
-        plabels = ["A", "alpha", "B"]
-        bounds = ([0, 0, 0], [1, 1, 1])
-
         # Run CurveFitAnalysis
         analysis_result, figs = super()._run_analysis(
             experiment_data,
             fit_fun,
-            outcome=outcome,
             p0=p0,
             p0_func=p0_func,
-            bounds=bounds,
-            plabels=plabels,
+            bounds=([0, 0, 0], [1, 1, 1]),
             plot=plot,
             ax=ax,
         )
@@ -97,6 +91,7 @@ class RBAnalysis(CurveFitAnalysis):
         scale = (2 ** num_qubits - 1) / (2 ** num_qubits)
         analysis_result["EPC"] = scale * (1 - popt[1])
         analysis_result["EPC_err"] = scale * popt_err[1] / popt[1]
+        analysis_result["plabels"] = ["A", "alpha", "B"]
 
         # Format figure
         if figs is not None:
