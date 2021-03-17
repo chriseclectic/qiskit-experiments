@@ -81,6 +81,7 @@ class RBAnalysis(CurveFitAnalysis):
             p0=p0,
             p0_func=p0_func,
             bounds=([0, 0, 0], [1, 1, 1]),
+            fit_mean_data=True,
             plot=plot,
             ax=ax,
         )

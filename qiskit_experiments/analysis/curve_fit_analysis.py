@@ -83,6 +83,7 @@ class CurveFitAnalysis(BaseAnalysis):
         ax: Optional["AxesSubplot"] = None,
         **kwargs,
     ):
+<<<<<<< HEAD
         """Run curve fit analysis on circuit data.
 
         Args:
@@ -111,10 +112,28 @@ class CurveFitAnalysis(BaseAnalysis):
 
         if p0_func is not None and p0 is None:
             p0 = p0_func(xdata, ydata, sigma=sigma)
+=======
+        """Generate plot of raw and fitted data"""
+        if not HAS_MATPLOTLIB:
+            raise ImportError(
+                "{} requires matplotlib to generate curve fit plot."
+                ' Run "pip install matplotlib" before.'.format(cls.__name__)
+            )
+
+        if ax is None:
+            plt.figure()
+            ax = plt.gca()
+
+        # Plot fit data
+        xs = np.linspace(np.min(xdata), np.max(xdata), num_fit_points)
+        ys_fit = func(xs, *popt)
+        ax.plot(xs, ys_fit, color="blue", linestyle="-", linewidth=2)
+>>>>>>> Update
 
         # Run curve fit
         result = curve_fit(func, xdata, ydata, p0, sigma=sigma, bounds=bounds, **kwargs)
 
+<<<<<<< HEAD
         if plot and HAS_MATPLOTLIB:
             ax = plot_curve_fit(func, result)
             if fit_mean_data:
@@ -127,3 +146,18 @@ class CurveFitAnalysis(BaseAnalysis):
             figs = None
 
         return result, figs
+=======
+        # Plot raw data
+        if ydata is not None:
+            ax.scatter(xdata, ydata, c="grey", marker="x")
+
+        # Error bar plot of mean data
+        if mean_data is not None:
+            ax.errorbar(mean_data[0], mean_data[1], mean_data[2],
+                        marker='.', markersize=9, linestyle='--', color='red')
+
+        # Formatting
+        ax.tick_params(labelsize=14)
+        ax.grid(True)
+        return ax
+>>>>>>> Update
