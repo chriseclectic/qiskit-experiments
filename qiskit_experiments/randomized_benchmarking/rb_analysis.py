@@ -13,9 +13,10 @@
 Standard RB analysis class.
 """
 
+from typing import Optional, List
+
 import numpy as np
-from scipy.optimize import curve_fit
-from qiskit_experiments.base_analysis import BaseAnalysis, AnalysisResult
+from qiskit_experiments.analysis.curve_fit_analysis import CurveFitAnalysis
 
 try:
     from matplotlib import pyplot as plt
@@ -25,109 +26,106 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 
-class RBAnalysis(BaseAnalysis):
-    """Base Analysis class for analyzing Experiment data."""
+class RBAnalysis(CurveFitAnalysis):
+    """RB Analysis class."""
 
-    def _run_analysis(self, experiment_data, **options):
+    # pylint: disable = arguments-differ
+    def _run_analysis(
+        self,
+        experiment_data,
+        p0: Optional[List[float]] = None,
+        plot: bool = True,
+        ax: Optional["AxesSubplot"] = None,
+    ):
         """Run analysis on circuit data.
 
         Args:
             experiment_data (ExperimentData): the experiment data to analyze.
-            options: kwarg options for analysis function.
+            p0: Optional, initial parameter values for curve_fit.
+            plot: If True generate a plot of fitted data.
+            ax: Optional, matplotlib axis to add plot to.
 
         Returns:
-            tuple: A pair ``(analysis_results, figures)`` where
+            tuple: A pair ``(analysis_result, figures)`` where
                    ``analysis_results`` may be a single or list of
                    AnalysisResult objects, and ``figures`` may be
                    None, a single figure, or a list of figures.
         """
-        # Initial guess
-        xdata, ydata, num_qubits = self._format_data(experiment_data.data)
-        fit_guess = self._fit_guess(xdata, ydata, num_qubits)
+        # TODO: Get from experiment level metadata
+        num_qubits = len(experiment_data.data[0]["metadata"]["qubits"])
+        outcome = num_qubits * "0"
+
+        # Fit function
+        def fit_fun(x, a, alpha, b):
+            return a * alpha ** x + b
+
+        # Initial guess function
+        # pylint: disable = unused-argument
+        def p0_func(xdata, ydata, sigma=None):
+            xmin = np.min(xdata)
+            y_mean_min = np.mean(ydata[xdata == xmin])
+
+            xmax = np.max(xdata)
+            y_mean_max = np.mean(ydata[xdata == xmax])
+
+            b_guess = 1 / (2 ** num_qubits)
+            a_guess = 1 - b_guess
+            alpha_guess = np.exp(
+                np.log((y_mean_min - b_guess) / (y_mean_max - b_guess)) / (xmin - xmax)
+            )
+            return [a_guess, alpha_guess, b_guess]
+
+        plabels = ["A", "alpha", "B"]
         bounds = ([0, 0, 0], [1, 1, 1])
 
-        params, pcov = curve_fit(self._fit_fun, xdata, ydata, p0=fit_guess, bounds=bounds)
-        params_err = np.sqrt(np.diag(pcov))
+        # Run CurveFitAnalysis
+        analysis_result, figs = super()._run_analysis(
+            experiment_data,
+            fit_fun,
+            outcome=outcome,
+            p0=p0,
+            p0_func=p0_func,
+            bounds=bounds,
+            plabels=plabels,
+            plot=plot,
+            ax=ax,
+        )
 
+        # Add EPC data
+        popt = analysis_result["popt"]
+        popt_err = analysis_result["popt_err"]
         scale = (2 ** num_qubits - 1) / (2 ** num_qubits)
-        epc = scale * (1 - params[1])
-        epc_err = scale * params_err[1] / params[1]
-        analysis_result = {
-            "EPC": epc,
-            "EPC_err": epc_err,
-            "params": params,
-            "params_err": np.sqrt(np.diag(pcov)),
-            "prams_cov": pcov,
-        }
-        ax = self._generate_plot(xdata, ydata, analysis_result)
-        # TODO: figure out what to do with plots
-        plt.show()
-        return AnalysisResult(analysis_result), [ax]
+        analysis_result["EPC"] = scale * (1 - popt[1])
+        analysis_result["EPC_err"] = scale * popt_err[1] / popt[1]
 
-    @staticmethod
-    def _format_data(data):
-        xdata = []
-        ydata = []
-        for datum in data:
-            metadata = datum["metadata"]
-            length = metadata["length"]
-            num_qubits = len(metadata["qubits"])
-            counts = datum["counts"]
-            p0 = counts.get(num_qubits * "0", 0) / sum(counts.values())
-            xdata.append(length)
-            ydata.append(p0)
-        return np.array(xdata), np.array(ydata), num_qubits
+        # Format figure
+        if figs is not None:
+            self._format_plot(figs[0], analysis_result)
+            # TODO: figure out what to do with plots
+            plt.show()
+        return analysis_result, figs
 
     @classmethod
-    def _generate_plot(cls, xdata, ydata, analysis_result, ax=None, add_label=True):
-
-        if not HAS_MATPLOTLIB:
-            raise ImportError(
-                "The function plot_rb_data needs matplotlib. "
-                'Run "pip install matplotlib" before.'
-            )
-
-        if ax is None:
-            plt.figure()
-            ax = plt.gca()
-
-        # Plot raw data
-        ax.scatter(xdata, ydata, c="gray", marker="x")
-
-        # Plot fit data
-        xfit = np.linspace(min(xdata), max(xdata), 100)
-        yfit = [cls._fit_fun(x, *analysis_result["params"]) for x in xfit]
-        ax.plot(xfit, yfit, color="blue", linestyle="-", linewidth=2)
-
-        # Plot mean and std dev
-        xvals = np.unique(xdata)
-        ymean = np.zeros(xvals.size)
-        yerr = np.zeros(xvals.size)
-        for i in range(xvals.size):
-            ys = ydata[xdata == xvals[i]]
-            ymean[i] = np.mean(ys)
-            yerr[i] = np.std(ys)
-        plt.errorbar(xvals, ymean, yerr=yerr, color="r", linestyle="--", linewidth=3)
-
+    def _format_plot(cls, ax, analysis_result, add_label=True):
+        """Format curve fit plot"""
         # Formatting
         ax.tick_params(labelsize=14)
-
         ax.set_xlabel("Clifford Length", fontsize=16)
         ax.set_ylabel("Ground State Population", fontsize=16)
         ax.grid(True)
 
         if add_label:
-            bbox_props = dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=2)
-
+            alpha = analysis_result["popt"][1]
+            alpha_err = analysis_result["popt_err"][1]
+            epc = analysis_result["EPC"]
+            epc_err = analysis_result["EPC_err"]
+            box_text = "\u03B1:{:.4f} \u00B1 {:.4f}".format(alpha, alpha_err)
+            box_text += "\nEPC: {:.4f} \u00B1 {:.4f}".format(epc, epc_err)
+            bbox_props = dict(boxstyle="square,pad=0.3", fc="white", ec="black", lw=1)
             ax.text(
                 0.6,
                 0.9,
-                "alpha:{:.3f}({:.3f}) EPC: {:.3f}({:.3f})".format(
-                    analysis_result["params"][1],
-                    analysis_result["params_err"][1],
-                    analysis_result["EPC"],
-                    analysis_result["EPC_err"],
-                ),
+                box_text,
                 ha="center",
                 va="center",
                 size=14,
@@ -135,24 +133,3 @@ class RBAnalysis(BaseAnalysis):
                 transform=ax.transAxes,
             )
         return ax
-
-    @staticmethod
-    def _fit_fun(x, a, alpha, b):
-        """Function used to fit RB."""
-        # pylint: disable=invalid-name
-        return a * alpha ** x + b
-
-    @staticmethod
-    def _fit_guess(xdata, ydata, num_qubits):
-        xmin = np.min(xdata)
-        y_mean_min = np.mean(ydata[xdata == xmin])
-
-        xmax = np.max(xdata)
-        y_mean_max = np.mean(ydata[xdata == xmax])
-
-        b_guess = 1 / (2 ** num_qubits)
-        a_guess = 1 - b_guess
-        alpha_guess = np.exp(
-            np.log((y_mean_min - b_guess) / (y_mean_max - b_guess)) / (xmin - xmax)
-        )
-        return [a_guess, alpha_guess, b_guess]

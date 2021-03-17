@@ -102,7 +102,7 @@ class RBExperiment(BaseExperiment):
         qubits = list(range(self.num_qubits))
         metadata = {
             "experiment_type": self._type,
-            "length": length,
+            "xdata": length,
             "group": "Clifford",
             "qubits": self.physical_qubits,
         }
