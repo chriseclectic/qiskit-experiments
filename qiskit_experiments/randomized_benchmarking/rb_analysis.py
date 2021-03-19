@@ -59,6 +59,8 @@ class RBAnalysis(CurveFitAnalysis):
             return a * alpha ** x + b
 
         # Initial guess function
+        # NOTE: I don't think this is a good guess function
+        # its just inserted as a place holder for one
         # pylint: disable = unused-argument
         def p0_func(xdata, ydata, sigma=None):
             xmin = np.min(xdata)
@@ -72,6 +74,8 @@ class RBAnalysis(CurveFitAnalysis):
             alpha_guess = np.exp(
                 np.log((y_mean_min - b_guess) / (y_mean_max - b_guess)) / (xmin - xmax)
             )
+            # Make sure alpha guess is feasible
+            alpha_guess = max(min(alpha_guess, 1), 0)
             return [a_guess, alpha_guess, b_guess]
 
         # Run CurveFitAnalysis
