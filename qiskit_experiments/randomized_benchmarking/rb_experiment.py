@@ -112,8 +112,7 @@ class RBExperiment(BaseExperiment):
             circ = QuantumCircuit(self.num_qubits)
             circ.metadata = {
                 "experiment_type": self._type,
-                "xdata": length,
-                "ylabel": self.num_qubits * "0",
+                "xval": length,
                 "group": "Clifford",
                 "qubits": self.physical_qubits,
             }
@@ -160,8 +159,7 @@ class RBExperiment(BaseExperiment):
             rb_circ.barrier(qubits)
             rb_circ.metadata = {
                 "experiment_type": self._type,
-                "xdata": length,
-                "ylabel": self.num_qubits * "0",
+                "xval": length,
                 "group": "Clifford",
                 "qubits": self.physical_qubits,
             }
