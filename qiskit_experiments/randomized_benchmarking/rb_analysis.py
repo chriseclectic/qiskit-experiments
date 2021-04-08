@@ -16,17 +16,15 @@ Standard RB analysis class.
 from typing import Optional, List
 
 import numpy as np
-from qiskit_experiments.analysis.curve_fit_analysis import CurveFitAnalysis
-
-try:
-    from matplotlib import pyplot as plt
-
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
+from qiskit_experiments.base_analysis import BaseAnalysis
+from qiskit_experiments.analysis.curve_fitting import curve_fit
+from qiskit_experiments.analysis.curve_fitting_data import (
+    curve_fit_data, mean_xy_data, level2_probability)
+from qiskit_experiments.analysis.plotting import (
+    HAS_MATPLOTLIB, plot_curve_fit, plot_errorbar, plot_scatter)
 
 
-class RBAnalysis(CurveFitAnalysis):
+class RBAnalysis(BaseAnalysis):
     """RB Analysis class."""
 
     # pylint: disable = arguments-differ
@@ -55,14 +53,15 @@ class RBAnalysis(CurveFitAnalysis):
         num_qubits = len(experiment_data.data[0]["metadata"]["qubits"])
 
         # Fit function
-        def fit_fun(x, a, alpha, b):
+        def func(x, a, alpha, b):
             return a * alpha ** x + b
 
+        # Data processing function
+        def process_data(data):
+            return level2_probability(data, num_qubits * "0")
+
         # Initial guess function
-        # NOTE: I don't think this is a good guess function
-        # its just inserted as a place holder for one
-        # pylint: disable = unused-argument
-        def p0_func(xdata, ydata, sigma=None):
+        def p0_func(xdata, ydata):
             xmin = np.min(xdata)
             y_mean_min = np.mean(ydata[xdata == xmin])
 
@@ -78,17 +77,16 @@ class RBAnalysis(CurveFitAnalysis):
             alpha_guess = max(min(alpha_guess, 1), 0)
             return [a_guess, alpha_guess, b_guess]
 
-        # Run CurveFitAnalysis
-        analysis_result, figs = super()._run_analysis(
-            experiment_data,
-            fit_fun,
-            p0=p0,
-            p0_func=p0_func,
-            bounds=([0, 0, 0], [1, 1, 1]),
-            fit_mean_data=True,
-            plot=plot,
-            ax=ax,
-        )
+        # Compute curve fit data
+        xraw, yraw, _ = curve_fit_data(experiment_data.data, process_data)
+        xdata, ydata, sigma = mean_xy_data(xraw, yraw)
+
+        p0 = p0_func(xdata, ydata)
+        bounds = ([0, 0, 0], [1, 1, 1])
+
+        # Run curve fit
+        analysis_result = curve_fit(
+            func, xdata, ydata, p0, sigma=sigma, bounds=bounds)
 
         # Add EPC data
         popt = analysis_result["popt"]
@@ -98,11 +96,17 @@ class RBAnalysis(CurveFitAnalysis):
         analysis_result["EPC_err"] = scale * popt_err[1] / popt[1]
         analysis_result["plabels"] = ["A", "alpha", "B"]
 
-        # Format figure
-        if figs is not None:
-            self._format_plot(figs[0], analysis_result)
-            # TODO: figure out what to do with plots
-            plt.show()
+        # Add figures
+        # TODO: figure out what to do with plots
+        if plot and HAS_MATPLOTLIB:
+            ax = plot_curve_fit(func, analysis_result, ax=ax)
+            ax = plot_scatter(xraw, yraw, ax=ax)
+            ax = plot_errorbar(xdata, ydata, sigma, ax=ax)
+            self._format_plot(ax, analysis_result)
+            figs = [ax]
+        else:
+            figs = None
+
         return analysis_result, figs
 
     @classmethod
