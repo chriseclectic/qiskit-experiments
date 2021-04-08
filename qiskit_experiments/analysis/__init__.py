@@ -15,5 +15,3 @@ Standalone analysis classes
 
 These can be used when creating experiments
 """
-
-from .curve_fit_analysis import CurveFitAnalysis
