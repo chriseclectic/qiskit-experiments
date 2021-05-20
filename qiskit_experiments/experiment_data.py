@@ -19,7 +19,8 @@ import uuid
 from collections import OrderedDict
 
 from qiskit.result import Result
-from qiskit.providers import Backend
+from qiskit.providers import Job, BaseJob, JobStatus
+from qiskit.providers.experiment import ExperimentDataV1
 from qiskit.exceptions import QiskitError
 from qiskit.providers import Job, BaseJob
 from qiskit.providers.exceptions import JobError
@@ -34,21 +35,30 @@ class AnalysisResult(dict):
     """Placeholder class"""
 
 
-class ExperimentData:
+class ExperimentData(ExperimentDataV1):
     """Qiskit Experiments Data container class"""
 
     def __init__(
         self,
-        experiment=None,
-        backend=None,
-        job_ids=None,
+        experiment: Optional["BaseExperiment"] = None,
+        backend: Optional[Union["Backend", "BaseBackend"]] = None,
+        job_ids: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        share_level: Optional[str] = None,
+        notes: Optional[str] = None,
     ):
         """Initialize experiment data.
 
         Args:
-            experiment (BaseExperiment): Optional, experiment object that generated the data.
-            backend (Backend): Optional, Backend the experiment runs on.
-            job_ids (list[str]): Optional, IDs of jobs submitted for the experiment.
+            experiment: experiment object that generated the data.
+            backend: Backend the experiment runs on. It can either be a
+                :class:`~qiskit.providers.Backend` instance or just backend name.
+            job_ids: IDs of jobs submitted for the experiment.
+            tags: Tags to be associated with the experiment.
+            share_level: Whether this experiment can be shared with others. This
+                is applicable only if the experiment service supports sharing. See
+                the specific service provider's documentation on valid values.
+            notes: Freeform notes about the experiment.
 
         Raises:
             ExperimentError: If an input argument is invalid.
@@ -56,27 +66,25 @@ class ExperimentData:
         # Experiment class object
         self._experiment = experiment
 
-        # Terra ExperimentDataV1 attributes
-        self._backend = backend
-        self._id = str(uuid.uuid4())
+        backend = None
         if experiment is not None:
-            self._type = experiment._type
+            experiment_type = experiment._type
         else:
-            self._type = None
-        job_ids = job_ids or []
-        self._jobs = OrderedDict((k, None) for k in job_ids)
-        self._data = []
-        self._figures = OrderedDict()
-        self._figure_names = []
-        self._analysis_results = []
+            experiment_type = None
+
+        super().__init__(
+            backend,
+            experiment_type=experiment_type,
+            experiment_id=str(uuid.uuid4()),
+            tags=tags,
+            job_ids=job_ids,
+            share_level=share_level,
+            notes=notes,
+        )
 
     @property
     def experiment(self):
-        """Return Experiment object.
-
-        Returns:
-            BaseExperiment: the experiment object.
-        """
+        """Return Experiment object"""
         return self._experiment
 
     @property
@@ -89,23 +97,14 @@ class ExperimentData:
         """Return the experiment id."""
         return self._id
 
-    @property
-    def job_ids(self) -> List[str]:
-        """Return experiment job IDs.
-
+    def status(self) -> str:
+        """Return the data processing status.
         Returns:
-            IDs of jobs submitted for this experiment.
+            Data processing status.
         """
-        return list(self._jobs.keys())
-
-    @property
-    def backend(self) -> Backend:
-        """Return backend.
-
-        Returns:
-            Backend this experiment is for.
-        """
-        return self._backend
+        if not self._jobs and not self._data:
+            return "EMPTY"
+        return super().status()
 
     def add_data(
         self,
@@ -137,31 +136,10 @@ class ExperimentData:
                     self.backend,
                 )
             self._backend = backend
-            self._jobs[data.job_id()] = data
-            self._add_result_data(data.result())
-        elif isinstance(data, dict):
-            self._add_single_data(data)
-        elif isinstance(data, (Job, BaseJob)):
-            try:
-                result = data.result()
-            except JobError as ex:
-                if hasattr(data, "error_message"):
-                    msg = data.error_message
-                else:
-                    msg = "Please contact to administrator of your provider."
-                raise QiskitError(f"Execution of experiment failed. {msg}") from ex
-            except KeyboardInterrupt as ex:
-                # remove job from queue list and return the empty result
-                data.cancel()
-                raise KeyboardInterrupt(ex) from ex
-            self._add_result_data(result)
-        elif isinstance(data, Result):
-            self._add_result_data(data)
-        elif isinstance(data, list):
-            for dat in data:
-                self.add_data(dat)
-        else:
-            raise QiskitError(f"Invalid data type {type(data)}.")
+            # Temporary hack to block until job is finished since collect function
+            # doesn't seem to be working correctly
+            data.result()
+        super().add_data(data, post_processing_callback)
 
     def _add_result_data(self, result: Result) -> None:
         """Add data from a Result object
@@ -179,13 +157,6 @@ class ExperimentData:
                     # Format to Counts object rather than hex dict
                     data["counts"] = result.get_counts(i)
                 self._add_single_data(data)
-
-    def _add_single_data(self, data: Dict[str, any]) -> None:
-        """Add a single data dictionary to the experiment.
-        Args:
-            data: Data to be added.
-        """
-        self._data.append(data)
 
     def data(self, index: Optional[Union[int, slice, str]] = None) -> Union[Dict, List[Dict]]:
         """Return the experiment data at the specified index.
@@ -205,6 +176,18 @@ class ExperimentData:
         Raises:
             QiskitError: if index is invalid.
         """
+        # Get job results if missing experiment data.
+        if self._jobs and not self._data and self._backend and self._backend.provider():
+            for jid in self._jobs:
+                if self._jobs[jid] is None:
+                    try:
+                        self._jobs[jid] = self._backend.provider().retrieve_job(jid)
+                    except Exception:  # pylint: disable=broad-except
+                        pass
+                if self._jobs[jid] is not None:
+                    self._add_result_data(self._jobs[jid].result())
+        self._collect_from_queues()
+
         if index is None:
             return self._data
         if isinstance(index, (int, slice)):
@@ -256,7 +239,9 @@ class ExperimentData:
         self._figure_names.append(figure_name)
         return out
 
-    def figure(self, figure_name: Union[str, int], file_name: Optional[str] = None):
+    def figure(
+        self, figure_name: Union[str, int], file_name: Optional[str] = None
+    ) -> Union[int, bytes]:
         """Retrieve the specified experiment figure.
 
         Args:
@@ -293,52 +278,6 @@ class ExperimentData:
             return figure_data
         raise QiskitError(f"Figure {figure_name} not found.")
 
-    @property
-    def figure_names(self) -> List[str]:
-        """Return names of the figures associated with this experiment.
-        Returns:
-            Names of figures associated with this experiment.
-        """
-        return self._figure_names
-
-    def add_analysis_result(self, result: AnalysisResult) -> None:
-        """Save the analysis result.
-        Args:
-            result: Analysis result to be saved.
-        """
-        self._analysis_results.append(result)
-
-    def analysis_result(
-        self, index: Optional[Union[int, slice, str]]
-    ) -> Union[AnalysisResult, List[AnalysisResult]]:
-        """Return analysis results associated with this experiment.
-
-        Args:
-            index: Index of the analysis result to be returned.
-                Several types are accepted for convenience:
-
-                    * None: Return all analysis results.
-                    * int: Specific index of the analysis results.
-                    * slice: A list slice of indexes.
-                    * str: ID of the analysis result.
-
-        Returns:
-            Analysis results for this experiment.
-
-        Raises:
-            QiskitError: if index is invalid.
-        """
-        if index is None:
-            return self._analysis_results
-        if isinstance(index, (int, slice)):
-            return self._analysis_results[index]
-        if isinstance(index, str):
-            for res in self._analysis_results:
-                if res.id == index:
-                    return res
-            raise QiskitError(f"Analysis result {index} not found.")
-        raise QiskitError(f"Invalid index type {type(index)}.")
-
     def status(self) -> str:
         """Return the data processing status.
 
@@ -349,20 +288,4 @@ class ExperimentData:
         # execution and analysis status
         if not self._jobs and not self._data:
             return "EMPTY"
-        return "DONE"
-
-    def __str__(self):
-        line = 51 * "-"
-        n_res = len(self._analysis_results)
-        ret = line
-        ret += f"\nExperiment: {self.experiment_type}"
-        ret += f"\nExperiment ID: {self.experiment_id}"
-        ret += f"\nStatus: {self.status()}"
-        ret += f"\nCircuits: {len(self._data)}"
-        ret += f"\nAnalysis Results: {n_res}"
-        ret += "\n" + line
-        if n_res:
-            ret += "\nLast Analysis Result"
-            for key, value in self._analysis_results[-1].items():
-                ret += f"\n- {key}: {value}"
-        return ret
+        return super().status()

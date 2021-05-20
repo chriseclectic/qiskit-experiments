@@ -24,9 +24,12 @@ class CompositeExperimentData(ExperimentData):
 
     def __init__(
         self,
-        experiment,
-        backend=None,
-        job_ids=None,
+        experiment: "CompositeExperiment",
+        backend: Optional[Union["Backend", "BaseBackend"]] = None,
+        job_ids: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        share_level: Optional[str] = None,
+        notes: Optional[str] = None,
     ):
         """Initialize experiment data.
 
@@ -34,7 +37,12 @@ class CompositeExperimentData(ExperimentData):
             experiment (CompositeExperiment): experiment object that generated the data.
             backend (Backend): Optional, Backend the experiment runs on. It can either be a
                 :class:`~qiskit.providers.Backend` instance or just backend name.
-            job_ids (list[str]): Optional, IDs of jobs submitted for the experiment.
+            job_ids: IDs of jobs submitted for the experiment.
+            tags: Tags to be associated with the experiment.
+            share_level: Whether this experiment can be shared with others. This
+                is applicable only if the experiment service supports sharing. See
+                the specific service provider's documentation on valid values.
+            notes: Freeform notes about the experiment.
 
         Raises:
             ExperimentError: If an input argument is invalid.
@@ -43,11 +51,16 @@ class CompositeExperimentData(ExperimentData):
         super().__init__(
             experiment,
             backend=backend,
+            tags=tags,
             job_ids=job_ids,
+            share_level=share_level,
+            notes=notes,
         )
 
         # Initialize sub experiments
-        self._components = [expr.__experiment_data__(expr) for expr in experiment._experiments]
+        self._components = [
+            expr.__experiment_data__(expr, backend=backend)
+            for expr in experiment._experiments]
 
     def __str__(self):
         line = 51 * "-"
